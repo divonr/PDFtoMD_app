@@ -4,6 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -25,6 +28,8 @@ fun FloatingTextToolbar(
     onBoldClick: () -> Unit,
     onItalicClick: () -> Unit,
     onQuoteClick: () -> Unit,
+    onCopyClick: () -> Unit,
+    onPasteClick: () -> Unit,
     onDismiss: () -> Unit
 ) {
     // A simple row of icon buttons
@@ -71,7 +76,29 @@ fun FloatingTextToolbar(
                 Text(
                     text = ">",
                     fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold // Make it visible
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            VerticalDivider()
+
+            // Copy Button
+            ToolbarButton(onClick = onCopyClick) {
+                Icon(
+                    imageVector = Icons.Default.ContentCopy,
+                    contentDescription = "Copy",
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            VerticalDivider()
+
+            // Paste Button
+            ToolbarButton(onClick = onPasteClick) {
+                Icon(
+                    imageVector = Icons.Default.ContentPaste,
+                    contentDescription = "Paste",
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }

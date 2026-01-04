@@ -18,10 +18,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalTextToolbar
+import androidx.compose.ui.platform.TextToolbar
+import androidx.compose.ui.platform.TextToolbarStatus
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.IntOffset
@@ -155,6 +162,7 @@ fun SplitScreen(
     onSaveClick: () -> Unit
 ) {
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     
     var textFieldValue by remember {
         mutableStateOf(TextFieldValue(text = markdownContent))
@@ -239,49 +247,51 @@ fun SplitScreen(
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
             } else {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    // Use a Box with vertical scroll to contain BasicTextField
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(scrollState)
-                            .padding(16.dp)
-                    ) {
-                        BasicTextField(
-                            value = textFieldValue,
-                            onValueChange = { newValue ->
-                                textFieldValue = newValue
-                                if (newValue.text != markdownContent) {
-                                    onMarkdownChange(newValue.text)
+                    // Suppress system text toolbar
+                    val emptyToolbar = remember { EmptyTextToolbar() }
+                    CompositionLocalProvider(LocalTextToolbar provides emptyToolbar) {
+                         Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(scrollState)
+                                .padding(16.dp)
+                        ) {
+                            BasicTextField(
+                                value = textFieldValue,
+                                onValueChange = { newValue ->
+                                    textFieldValue = newValue
+                                    if (newValue.text != markdownContent) {
+                                        onMarkdownChange(newValue.text)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                onTextLayout = { textLayoutResult = it },
+                                textStyle = TextStyle(
+                                    fontSize = 16.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                ),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                decorationBox = { innerTextField ->
+                                    if (textFieldValue.text.isEmpty()) {
+                                        Text(
+                                            text = "Markdown will appear here...",
+                                            style = TextStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        )
+                                    }
+                                    innerTextField()
                                 }
-                            },
-                            modifier = Modifier.fillMaxWidth(), // Fix: Avoid fillMaxSize inside scrollable
-                            onTextLayout = { textLayoutResult = it },
-                            textStyle = TextStyle(
-                                fontSize = 16.sp,
-                                color = MaterialTheme.colorScheme.onSurface
-                            ),
-                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                            decorationBox = { innerTextField ->
-                                if (textFieldValue.text.isEmpty()) {
-                                    Text(
-                                        text = "Markdown will appear here...",
-                                        style = TextStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    )
-                                }
-                                innerTextField()
-                            }
-                        )
+                            )
+                        }
                     }
 
                     if (!selection.collapsed && popupPosition != null) {
                         Popup(
                             offset = popupPosition!!,
-                            alignment = Alignment.TopStart, // relative to the parent Box
+                            alignment = Alignment.TopStart,
                             properties = PopupProperties(focusable = false)
                         ) {
-                            // Adjust Y offset: popupPosition is at the top of the line.
                             val yOffset = (-50).dp + 16.dp
-                            val xOffset = 16.dp // Add left padding
+                            val xOffset = 16.dp
 
                             Box(modifier = Modifier.offset(x = xOffset, y = yOffset)) {
                                 FloatingTextToolbar(
@@ -300,6 +310,30 @@ fun SplitScreen(
                                         textFieldValue = newVal
                                         onMarkdownChange(newVal.text)
                                     },
+                                    onCopyClick = {
+                                        val selectedText = textFieldValue.text.substring(selection.min, selection.max)
+                                        clipboardManager.setText(AnnotatedString(selectedText))
+                                        // Clear selection? Typically copy keeps selection,
+                                        // but floating toolbar logic usually dismisses after action.
+                                        // Let's dismiss to be consistent with other buttons.
+                                        textFieldValue = textFieldValue.copy(selection = TextRange(selection.max))
+                                    },
+                                    onPasteClick = {
+                                        val clipboardText = clipboardManager.getText()?.text
+                                        if (clipboardText != null) {
+                                            val text = textFieldValue.text
+                                            val start = selection.min
+                                            val end = selection.max
+                                            val newText = text.replaceRange(start, end, clipboardText)
+                                            val newCursor = start + clipboardText.length
+
+                                            textFieldValue = TextFieldValue(
+                                                text = newText,
+                                                selection = TextRange(newCursor)
+                                            )
+                                            onMarkdownChange(newText)
+                                        }
+                                    },
                                     onDismiss = {}
                                 )
                             }
@@ -308,5 +342,20 @@ fun SplitScreen(
                 }
             }
         }
+    }
+}
+
+// Custom Toolbar to disable system menu
+class EmptyTextToolbar : TextToolbar {
+    override val status: TextToolbarStatus = TextToolbarStatus.Hidden
+    override fun hide() {}
+    override fun showMenu(
+        rect: Rect,
+        onCopy: (() -> Unit)?,
+        onPaste: (() -> Unit)?,
+        onCut: (() -> Unit)?,
+        onSelectAll: (() -> Unit)?
+    ) {
+        // Do nothing to suppress system menu
     }
 }
