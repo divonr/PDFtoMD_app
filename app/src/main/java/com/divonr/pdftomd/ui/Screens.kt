@@ -7,6 +7,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -22,6 +24,7 @@ fun AppScreen(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     var showSettings by remember { mutableStateOf(false) }
+    var showProjectList by remember { mutableStateOf(false) }
 
     if (uiState.error != null) {
         Toast.makeText(context, uiState.error, Toast.LENGTH_LONG).show()
@@ -30,18 +33,25 @@ fun AppScreen(viewModel: MainViewModel) {
 
     if (showSettings) {
         SettingsScreen(viewModel = viewModel, onBack = { showSettings = false })
+    } else if (showProjectList) {
+        ProjectListScreen(
+            projects = uiState.projects,
+            onProjectClick = {
+                viewModel.loadProject(it)
+                showProjectList = false
+            },
+            onDeleteProject = { viewModel.deleteProject(it) },
+            onBack = { showProjectList = false }
+        )
     } else {
         if (uiState.apiKey.isNullOrEmpty()) {
-             // If no keys at all, show simplified initial screen,
-             // or just redirect to Settings/ApiKey screen.
-             // We can reuse ApiKeyScreen for first time, but it should add to keys.
-             // Or better: Show ApiKeyScreen but hook it to saveApiKey which now adds it.
              ApiKeyScreen(onSave = { viewModel.saveApiKey(it) })
         } else {
             if (uiState.pdfFile == null) {
                 UploadScreen(
                     onPdfSelected = { viewModel.loadPdf(it) },
                     onLoadSession = { viewModel.loadSession(it) },
+                    onManageProjectsClick = { showProjectList = true },
                     onSettingsClick = { showSettings = true }
                 )
             } else {
@@ -50,7 +60,15 @@ fun AppScreen(viewModel: MainViewModel) {
                     markdownContent = uiState.markdownContent,
                     onMarkdownChange = { viewModel.updateMarkdown(it) },
                     isLoading = uiState.isLoading,
-                    onSettingsClick = { showSettings = true }
+                    onSettingsClick = { showSettings = true },
+                    onBackClick = { viewModel.closeProject() },
+                    onRequeryClick = { viewModel.retryGemini() },
+                    onSaveClick = {
+                        // Prompt for name or just save as Untitled?
+                        // For simplicity, let's use a dialog or just a timestamped name if new
+                        // Or if it already has an ID, just save.
+                        viewModel.saveCurrentProject("Project ${System.currentTimeMillis()}")
+                    }
                 )
             }
         }
@@ -78,6 +96,7 @@ fun ApiKeyScreen(onSave: (String) -> Unit) {
 fun UploadScreen(
     onPdfSelected: (Uri) -> Unit,
     onLoadSession: (List<Uri>) -> Unit,
+    onManageProjectsClick: () -> Unit,
     onSettingsClick: () -> Unit
 ) {
     val pdfLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.GetContent()) { uri ->
@@ -105,8 +124,12 @@ fun UploadScreen(
                 Text("Upload PDF to Start")
             }
             Spacer(modifier = Modifier.height(16.dp))
-            OutlinedButton(onClick = { sessionLauncher.launch(arrayOf("application/pdf", "text/plain")) }) {
-                Text("Load Session (PDF + TXT)")
+            OutlinedButton(onClick = onManageProjectsClick) {
+                 Text("Manage Projects")
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            TextButton(onClick = { sessionLauncher.launch(arrayOf("application/pdf", "text/plain")) }) {
+                Text("Load Legacy Session")
             }
         }
     }
@@ -118,7 +141,10 @@ fun SplitScreen(
     markdownContent: String,
     onMarkdownChange: (String) -> Unit,
     isLoading: Boolean,
-    onSettingsClick: () -> Unit
+    onSettingsClick: () -> Unit,
+    onBackClick: () -> Unit,
+    onRequeryClick: () -> Unit,
+    onSaveClick: () -> Unit
 ) {
     val context = LocalContext.current
     
@@ -129,17 +155,23 @@ fun SplitScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-             // Left side: Settings
-             IconButton(onClick = onSettingsClick) {
-                 Icon(Icons.Default.Settings, contentDescription = "Settings")
+             // Left side: Back & Settings
+             Row {
+                 IconButton(onClick = onBackClick) {
+                     Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                 }
+                 IconButton(onClick = onSettingsClick) {
+                     Icon(Icons.Default.Settings, contentDescription = "Settings")
+                 }
+                 // Re-query Button
+                 IconButton(onClick = onRequeryClick) {
+                     Icon(Icons.Default.Refresh, contentDescription = "Re-process PDF")
+                 }
              }
 
              // Right side: Actions
              Row {
-                 Button(onClick = {
-                     // Manual Save trigger (already auto-saving but good validation)
-                     Toast.makeText(context, "Saved.", Toast.LENGTH_SHORT).show()
-                 }) {
+                 Button(onClick = onSaveClick) {
                      Text("Save")
                  }
                  Spacer(modifier = Modifier.width(8.dp))

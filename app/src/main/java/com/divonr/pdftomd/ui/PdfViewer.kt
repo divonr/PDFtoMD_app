@@ -30,6 +30,8 @@ fun PdfViewer(
     var pages by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var scale by remember { mutableFloatStateOf(1f) }
+    var rotationAngle by remember { mutableFloatStateOf(0f) }
+    var showMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(pdfFile) {
         isLoading = true
@@ -53,9 +55,16 @@ fun PdfViewer(
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) {
-                        detectTransformGestures { _, _, zoom, _ ->
+                        detectTransformGestures { _, pan, zoom, _ ->
                             scale = (scale * zoom).coerceIn(0.5f, 3f)
+                            // We aren't handling pan, but could if needed
                         }
+                    }
+                    // Separate pointer input for tap/long press to avoid conflict with transform
+                    .pointerInput(Unit) {
+                        androidx.compose.foundation.gestures.detectTapGestures(
+                            onLongPress = { showMenu = true }
+                        )
                     },
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -68,11 +77,26 @@ fun PdfViewer(
                             .padding(4.dp)
                             .graphicsLayer(
                                 scaleX = scale,
-                                scaleY = scale
+                                scaleY = scale,
+                                rotationZ = rotationAngle
                             ),
                         contentScale = ContentScale.FillWidth
                     )
                 }
+            }
+
+            // Floating Menu for Rotation
+            androidx.compose.material3.DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { showMenu = false }
+            ) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { androidx.compose.material3.Text("Rotate 90°") },
+                    onClick = {
+                        rotationAngle += 90f
+                        showMenu = false
+                    }
+                )
             }
         }
     }
