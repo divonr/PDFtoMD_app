@@ -13,9 +13,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.ViewModelProvider
+import com.divonr.pdftomd.data.AppDatabase
 import com.divonr.pdftomd.data.GeminiRepository
 import com.divonr.pdftomd.data.PdfRepository
 import com.divonr.pdftomd.data.PreferenceManager
+import com.divonr.pdftomd.data.ProjectRepository
 import com.divonr.pdftomd.ui.AppScreen
 import com.divonr.pdftomd.ui.MainViewModel
 import com.divonr.pdftomd.ui.MainViewModelFactory
@@ -32,7 +34,10 @@ class MainActivity : ComponentActivity() {
         val prefManager = PreferenceManager(this)
         val geminiRepo = GeminiRepository()
         val pdfRepo = PdfRepository(this)
-        val factory = MainViewModelFactory(prefManager, geminiRepo, pdfRepo)
+        val database = AppDatabase.getDatabase(this)
+        val projectRepo = ProjectRepository(database.projectDao())
+
+        val factory = MainViewModelFactory(prefManager, geminiRepo, pdfRepo, projectRepo)
         viewModel = ViewModelProvider(this, factory)[MainViewModel::class.java]
 
         handleIntent(intent)

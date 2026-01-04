@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.divonr.pdftomd.data.GeminiRepository
 import com.divonr.pdftomd.data.PdfRepository
 import com.divonr.pdftomd.data.PreferenceManager
+import com.divonr.pdftomd.data.ProjectEntity
+import com.divonr.pdftomd.data.ProjectRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,13 +24,16 @@ data class UiState(
     val pdfFile: File? = null,
     val markdownContent: String = "",
     val isLoading: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val currentProjectId: Long? = null,
+    val projects: List<ProjectEntity> = emptyList()
 )
 
 class MainViewModel(
     private val preferenceManager: PreferenceManager,
     private val geminiRepository: GeminiRepository,
-    private val pdfRepository: PdfRepository
+    private val pdfRepository: PdfRepository,
+    private val projectRepository: ProjectRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(UiState())
@@ -40,14 +45,22 @@ class MainViewModel(
             combine(
                 preferenceManager.apiKey,
                 preferenceManager.savedApiKeys,
-                preferenceManager.modelId
-            ) { apiKey, savedKeys, modelId ->
-                Triple(apiKey, savedKeys, modelId)
-            }.collect { (apiKey, savedKeys, modelId) ->
-                _uiState.value = _uiState.value.copy(
+                preferenceManager.modelId,
+                projectRepository.allProjects
+            ) { apiKey, savedKeys, modelId, projects ->
+                UiState(
                     apiKey = apiKey,
                     savedApiKeys = savedKeys,
-                    activeModelId = modelId
+                    activeModelId = modelId,
+                    projects = projects
+                )
+            }.collect { newState ->
+                // Preserve current session state (pdf, md, etc)
+                _uiState.value = _uiState.value.copy(
+                    apiKey = newState.apiKey,
+                    savedApiKeys = newState.savedApiKeys,
+                    activeModelId = newState.activeModelId,
+                    projects = newState.projects
                 )
             }
         }
@@ -73,36 +86,34 @@ class MainViewModel(
 
     fun loadPdf(uri: Uri) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+            _uiState.value = _uiState.value.copy(isLoading = true, error = null, currentProjectId = null)
             try {
-                // Copy to internal storage so we can always access it
-                val file = pdfRepository.copyPdfToInternalStorage(uri, "current_doc.pdf")
+                // Generate a unique filename to store permanently
+                val fileName = "doc_${System.currentTimeMillis()}.pdf"
+                val file = pdfRepository.copyPdfToInternalStorage(uri, fileName)
                 _uiState.value = _uiState.value.copy(pdfFile = file)
                 
                 // Trigger Gemini
-                val apiKey = _uiState.value.apiKey
-                val modelId = _uiState.value.activeModelId
-                if (apiKey != null) {
-                    generateMarkdown(file, apiKey, modelId)
-                } else {
-                    _uiState.value = _uiState.value.copy(isLoading = false, error = "API Key missing")
-                }
+                retryGemini()
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(isLoading = false, error = e.localizedMessage)
             }
         }
     }
     
-    // For loading existing session (if we implement session restoration fully)
-    fun loadExistingSession(pdfFile: File, markdownFile: File) {
-         viewModelScope.launch {
-             try {
-                 val content = markdownFile.readText()
-                 _uiState.value = _uiState.value.copy(pdfFile = pdfFile, markdownContent = content)
-             } catch (e: Exception) {
-                 _uiState.value = _uiState.value.copy(error = "Failed to restore session")
-             }
-         }
+    fun retryGemini() {
+        viewModelScope.launch {
+            val file = _uiState.value.pdfFile
+            val apiKey = _uiState.value.apiKey
+            val modelId = _uiState.value.activeModelId
+
+            if (file != null && apiKey != null) {
+                _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+                generateMarkdown(file, apiKey, modelId)
+            } else if (apiKey == null) {
+                _uiState.value = _uiState.value.copy(error = "API Key missing")
+            }
+        }
     }
 
     private suspend fun generateMarkdown(pdfFile: File, apiKey: String, modelId: String) {
@@ -110,8 +121,15 @@ class MainViewModel(
             val bytes = pdfFile.readBytes()
             val markdown = geminiRepository.generateMarkdownFromPdf(apiKey, modelId, bytes)
             _uiState.value = _uiState.value.copy(markdownContent = markdown, isLoading = false)
-            // Auto-save
-            saveMarkdown(markdown)
+            // Save project update if exists
+            val currentId = _uiState.value.currentProjectId
+            if (currentId != null) {
+                // We should update the existing project if it's already saved
+                 val currentProject = projectRepository.getProject(currentId)
+                 if (currentProject != null) {
+                     projectRepository.saveProject(currentProject.copy(markdownContent = markdown, lastModified = System.currentTimeMillis()))
+                 }
+            }
         } catch (e: Exception) {
             _uiState.value = _uiState.value.copy(isLoading = false, error = e.localizedMessage)
         }
@@ -119,38 +137,90 @@ class MainViewModel(
 
     fun updateMarkdown(content: String) {
         _uiState.value = _uiState.value.copy(markdownContent = content)
-        // Debounce save in real app, here simple save
+        // Auto-save logic if it's an existing project
         viewModelScope.launch {
-             pdfRepository.saveTextToFile(content, "current_doc.md")
+            val currentId = _uiState.value.currentProjectId
+            if (currentId != null) {
+                val currentProject = projectRepository.getProject(currentId)
+                if (currentProject != null) {
+                    projectRepository.saveProject(currentProject.copy(markdownContent = content, lastModified = System.currentTimeMillis()))
+                }
+            }
         }
     }
     
-    fun saveMarkdown(content: String) {
+    fun saveCurrentProject(name: String = "Untitled Project") {
+         viewModelScope.launch {
+             try {
+                 val pdfFile = _uiState.value.pdfFile ?: return@launch
+                 val content = _uiState.value.markdownContent
+
+                 // If updating existing
+                 val currentId = _uiState.value.currentProjectId
+                 if (currentId != null) {
+                     val existing = projectRepository.getProject(currentId)
+                     if (existing != null) {
+                         projectRepository.saveProject(existing.copy(markdownContent = content, lastModified = System.currentTimeMillis()))
+                         _uiState.value = _uiState.value.copy(error = "Saved")
+                         return@launch
+                     }
+                 }
+
+                 // Creating new
+                 val project = ProjectEntity(
+                     name = name,
+                     pdfUriString = pdfFile.absolutePath,
+                     markdownContent = content
+                 )
+                 val id = projectRepository.saveProject(project)
+                 _uiState.value = _uiState.value.copy(currentProjectId = id, error = "Project Saved")
+             } catch (e: Exception) {
+                 _uiState.value = _uiState.value.copy(error = "Failed to save project: ${e.message}")
+             }
+         }
+    }
+
+    fun loadProject(project: ProjectEntity) {
         viewModelScope.launch {
-            pdfRepository.saveTextToFile(content, "current_doc.md")
+             try {
+                 val pdfFile = File(project.pdfUriString)
+                 if (pdfFile.exists()) {
+                     _uiState.value = _uiState.value.copy(
+                         pdfFile = pdfFile,
+                         markdownContent = project.markdownContent,
+                         currentProjectId = project.id,
+                         isLoading = false
+                     )
+                 } else {
+                     _uiState.value = _uiState.value.copy(error = "PDF File not found")
+                 }
+             } catch (e: Exception) {
+                 _uiState.value = _uiState.value.copy(error = "Error loading project")
+             }
         }
     }
 
+    fun closeProject() {
+        _uiState.value = _uiState.value.copy(pdfFile = null, markdownContent = "", currentProjectId = null)
+    }
+
     fun loadSession(uris: List<Uri>) {
+        // Legacy: kept for compatibility if needed, but we prefer Projects now
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+            _uiState.value = _uiState.value.copy(isLoading = true, error = null, currentProjectId = null)
             try {
                 var pdfFound = false
                 var mdFound = false
                 
                 uris.forEach { uri ->
                     val path = uri.path?.lowercase() ?: ""
-                    // Simple heuristic or content resolver type check could be better
-                    // But assume order or try to detect content? 
-                    // Let's assume user picks PDF and Text. 
-                    // Best way: Check MimeType
-                    val mimeType = pdfRepository.getMimeType(uri) // We need helper or just use string check
+                    val mimeType = pdfRepository.getMimeType(uri)
                     if (mimeType?.contains("pdf") == true || path.endsWith(".pdf")) {
-                         val file = pdfRepository.copyPdfToInternalStorage(uri, "current_doc.pdf")
+                         val file = pdfRepository.copyPdfToInternalStorage(uri, "session_doc.pdf")
                          _uiState.value = _uiState.value.copy(pdfFile = file)
                          pdfFound = true
                     } else if (mimeType?.startsWith("text") == true || path.endsWith(".txt") || path.endsWith(".md")) {
-                         val file = pdfRepository.copyFileToInternalStorage(uri, "current_doc.md")
+                         val file = pdfRepository.copyFileToInternalStorage(uri, "session_doc.md")
                          val content = file.readText()
                          _uiState.value = _uiState.value.copy(markdownContent = content)
                          mdFound = true
@@ -168,6 +238,18 @@ class MainViewModel(
         }
     }
     
+    fun deleteProject(id: Long) {
+        viewModelScope.launch {
+            try {
+                // Optional: Delete associated PDF file if we want to clean up storage
+                // For now, let's just delete the record
+                projectRepository.deleteProject(id)
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(error = "Failed to delete project")
+            }
+        }
+    }
+
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
     }
@@ -176,12 +258,13 @@ class MainViewModel(
 class MainViewModelFactory(
     private val preferenceManager: PreferenceManager,
     private val geminiRepository: GeminiRepository,
-    private val pdfRepository: PdfRepository
+    private val pdfRepository: PdfRepository,
+    private val projectRepository: ProjectRepository
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return MainViewModel(preferenceManager, geminiRepository, pdfRepository) as T
+            return MainViewModel(preferenceManager, geminiRepository, pdfRepository, projectRepository) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }
