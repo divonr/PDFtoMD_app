@@ -5,7 +5,11 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
@@ -14,8 +18,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import com.divonr.pdftomd.ui.MainViewModel
 import java.io.File
 
@@ -64,9 +77,6 @@ fun AppScreen(viewModel: MainViewModel) {
                     onBackClick = { viewModel.closeProject() },
                     onRequeryClick = { viewModel.retryGemini() },
                     onSaveClick = {
-                        // Prompt for name or just save as Untitled?
-                        // For simplicity, let's use a dialog or just a timestamped name if new
-                        // Or if it already has an ID, just save.
                         viewModel.saveCurrentProject("Project ${System.currentTimeMillis()}")
                     }
                 )
@@ -91,7 +101,6 @@ fun ApiKeyScreen(onSave: (String) -> Unit) {
     }
 }
 
-// UploadScreen Update
 @Composable
 fun UploadScreen(
     onPdfSelected: (Uri) -> Unit,
@@ -108,7 +117,6 @@ fun UploadScreen(
     }
     
     Box(modifier = Modifier.fillMaxSize()) {
-        // Settings Button
         IconButton(
             onClick = onSettingsClick,
             modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
@@ -148,14 +156,46 @@ fun SplitScreen(
 ) {
     val context = LocalContext.current
     
+    var textFieldValue by remember {
+        mutableStateOf(TextFieldValue(text = markdownContent))
+    }
+
+    LaunchedEffect(markdownContent) {
+        if (textFieldValue.text != markdownContent) {
+             textFieldValue = textFieldValue.copy(text = markdownContent)
+        }
+    }
+
+    // Scroll state for the text editor container
+    val scrollState = rememberScrollState()
+
+    var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val selection = textFieldValue.selection
+
+    val popupPosition by remember(selection, textLayoutResult, scrollState.value) {
+        derivedStateOf {
+            if (selection.collapsed || textLayoutResult == null) return@derivedStateOf null
+
+            val layout = textLayoutResult!!
+            val startOffset = selection.min.coerceIn(0, layout.layoutInput.text.length)
+
+            try {
+                val boundingBox = layout.getBoundingBox(startOffset)
+                // Calculate position relative to the scrollable container's visible area
+                val y = boundingBox.top.toInt() - scrollState.value
+                IntOffset(boundingBox.left.toInt(), y)
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
-        // Toolbar / Actions
         Row(
             modifier = Modifier.fillMaxWidth().padding(8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-             // Left side: Back & Settings
              Row {
                  IconButton(onClick = onBackClick) {
                      Icon(Icons.Default.ArrowBack, contentDescription = "Back")
@@ -163,13 +203,11 @@ fun SplitScreen(
                  IconButton(onClick = onSettingsClick) {
                      Icon(Icons.Default.Settings, contentDescription = "Settings")
                  }
-                 // Re-query Button
                  IconButton(onClick = onRequeryClick) {
                      Icon(Icons.Default.Refresh, contentDescription = "Re-process PDF")
                  }
              }
 
-             // Right side: Actions
              Row {
                  Button(onClick = onSaveClick) {
                      Text("Save")
@@ -189,7 +227,6 @@ fun SplitScreen(
              }
         }
     
-        // Top Half: PDF (Weight 1f)
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             PdfViewer(
                 pdfFile = pdfFile,
@@ -197,17 +234,78 @@ fun SplitScreen(
             )
         }
         
-        // Bottom Half: Editor (Weight 1f)
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (isLoading) {
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
             } else {
-                TextField(
-                    value = markdownContent,
-                    onValueChange = onMarkdownChange,
-                    modifier = Modifier.fillMaxSize(),
-                    placeholder = { Text("Markdown will appear here...") }
-                )
+                Box(modifier = Modifier.fillMaxSize()) {
+                    // Use a Box with vertical scroll to contain BasicTextField
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollState)
+                            .padding(16.dp)
+                    ) {
+                        BasicTextField(
+                            value = textFieldValue,
+                            onValueChange = { newValue ->
+                                textFieldValue = newValue
+                                if (newValue.text != markdownContent) {
+                                    onMarkdownChange(newValue.text)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(), // Fix: Avoid fillMaxSize inside scrollable
+                            onTextLayout = { textLayoutResult = it },
+                            textStyle = TextStyle(
+                                fontSize = 16.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            ),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            decorationBox = { innerTextField ->
+                                if (textFieldValue.text.isEmpty()) {
+                                    Text(
+                                        text = "Markdown will appear here...",
+                                        style = TextStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    )
+                                }
+                                innerTextField()
+                            }
+                        )
+                    }
+
+                    if (!selection.collapsed && popupPosition != null) {
+                        Popup(
+                            offset = popupPosition!!,
+                            alignment = Alignment.TopStart, // relative to the parent Box
+                            properties = PopupProperties(focusable = false)
+                        ) {
+                            // Adjust Y offset: popupPosition is at the top of the line.
+                            val yOffset = (-50).dp + 16.dp
+                            val xOffset = 16.dp // Add left padding
+
+                            Box(modifier = Modifier.offset(x = xOffset, y = yOffset)) {
+                                FloatingTextToolbar(
+                                    onBoldClick = {
+                                        val newVal = MarkdownUtils.applyBold(textFieldValue)
+                                        textFieldValue = newVal
+                                        onMarkdownChange(newVal.text)
+                                    },
+                                    onItalicClick = {
+                                        val newVal = MarkdownUtils.applyItalic(textFieldValue)
+                                        textFieldValue = newVal
+                                        onMarkdownChange(newVal.text)
+                                    },
+                                    onQuoteClick = {
+                                        val newVal = MarkdownUtils.toggleQuote(textFieldValue)
+                                        textFieldValue = newVal
+                                        onMarkdownChange(newVal.text)
+                                    },
+                                    onDismiss = {}
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
