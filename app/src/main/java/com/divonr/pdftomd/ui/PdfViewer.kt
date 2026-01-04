@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -62,7 +63,7 @@ fun PdfViewer(
                     }
                     // Separate pointer input for tap/long press to avoid conflict with transform
                     .pointerInput(Unit) {
-                        androidx.compose.foundation.gestures.detectTapGestures(
+                        detectTapGestures(
                             onLongPress = { showMenu = true }
                         )
                     },
