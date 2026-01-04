@@ -10,12 +10,15 @@ import com.divonr.pdftomd.data.PreferenceManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
 
 data class UiState(
     val apiKey: String? = null,
+    val savedApiKeys: Set<String> = emptySet(),
+    val activeModelId: String = PreferenceManager.DEFAULT_MODEL,
     val pdfFile: File? = null,
     val markdownContent: String = "",
     val isLoading: Boolean = false,
@@ -33,8 +36,19 @@ class MainViewModel(
 
     init {
         viewModelScope.launch {
-            preferenceManager.apiKey.collect { key ->
-                _uiState.value = _uiState.value.copy(apiKey = key)
+            // Combine flows to update state
+            combine(
+                preferenceManager.apiKey,
+                preferenceManager.savedApiKeys,
+                preferenceManager.modelId
+            ) { apiKey, savedKeys, modelId ->
+                Triple(apiKey, savedKeys, modelId)
+            }.collect { (apiKey, savedKeys, modelId) ->
+                _uiState.value = _uiState.value.copy(
+                    apiKey = apiKey,
+                    savedApiKeys = savedKeys,
+                    activeModelId = modelId
+                )
             }
         }
     }
@@ -42,6 +56,18 @@ class MainViewModel(
     fun saveApiKey(key: String) {
         viewModelScope.launch {
             preferenceManager.saveApiKey(key)
+        }
+    }
+
+    fun setActiveApiKey(key: String) {
+        viewModelScope.launch {
+            preferenceManager.setActiveApiKey(key)
+        }
+    }
+
+    fun setModelId(id: String) {
+        viewModelScope.launch {
+            preferenceManager.setModelId(id)
         }
     }
 
@@ -55,8 +81,9 @@ class MainViewModel(
                 
                 // Trigger Gemini
                 val apiKey = _uiState.value.apiKey
+                val modelId = _uiState.value.activeModelId
                 if (apiKey != null) {
-                    generateMarkdown(file, apiKey)
+                    generateMarkdown(file, apiKey, modelId)
                 } else {
                     _uiState.value = _uiState.value.copy(isLoading = false, error = "API Key missing")
                 }
@@ -78,10 +105,10 @@ class MainViewModel(
          }
     }
 
-    private suspend fun generateMarkdown(pdfFile: File, apiKey: String) {
+    private suspend fun generateMarkdown(pdfFile: File, apiKey: String, modelId: String) {
         try {
             val bytes = pdfFile.readBytes()
-            val markdown = geminiRepository.generateMarkdownFromPdf(apiKey, bytes)
+            val markdown = geminiRepository.generateMarkdownFromPdf(apiKey, modelId, bytes)
             _uiState.value = _uiState.value.copy(markdownContent = markdown, isLoading = false)
             // Auto-save
             saveMarkdown(markdown)
@@ -140,8 +167,6 @@ class MainViewModel(
             }
         }
     }
-    
-    // Add missing method in PdfRepository for this or just do simple contentResolver.getType
     
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)

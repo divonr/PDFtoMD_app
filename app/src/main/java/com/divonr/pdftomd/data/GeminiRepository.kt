@@ -8,9 +8,9 @@ import kotlinx.coroutines.withContext
 
 class GeminiRepository {
 
-    suspend fun generateMarkdownFromPdf(apiKey: String, pdfBytes: ByteArray, mimeType: String = "application/pdf"): String = withContext(Dispatchers.IO) {
+    suspend fun generateMarkdownFromPdf(apiKey: String, modelId: String, pdfBytes: ByteArray, mimeType: String = "application/pdf"): String = withContext(Dispatchers.IO) {
         val generativeModel = GenerativeModel(
-            modelName = "gemini-2.0-flash-exp", // Updated to the latest flash model as requested or similar powerful model
+            modelName = modelId,
             apiKey = apiKey
         )
 
